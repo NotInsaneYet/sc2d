@@ -1,0 +1,8 @@
+build*/
+*.apk
+keystore.jks
+*.o
+*.dex
+fftest
+rumbletest
+hidrawtest
