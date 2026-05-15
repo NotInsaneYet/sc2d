@@ -104,7 +104,14 @@ public:
     bool DisableLizardMode();
     bool EnableLizardMode();
 
+    static void ReleaseStuckKeys();
+
     size_t ReadReport(uint8_t* buffer, size_t size, uint32_t timeoutMs = 16);
+
+    // Drain incoming reports until the specified button mask bytes are all zero
+    // (i.e. physical buttons released). TimeoutMs is total time before giving up.
+    void DrainUntilReleased(uint8_t maskB2, uint8_t maskB3, uint8_t maskB4,
+                            uint32_t timeoutMs = 2000);
 
     // Parse helpers — extract 16-bit LE value from report
     static int16_t ParseInt16(const uint8_t* buf, int offset)

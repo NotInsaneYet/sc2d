@@ -14,6 +14,12 @@ public:
 
     bool Create();
     void Destroy();
+    void ReleaseAll();
+
+    // Create a temporary uinput keyboard and release every scancode to flush
+    // any stuck key-down that the firmware emitted through the keyboard HID
+    // interface. Safe to call at any time (no persistent state).
+    static void ReleaseAllKeyboardKeys();
 
     bool IsValid() const { return m_fd >= 0; }
 

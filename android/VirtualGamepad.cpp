@@ -54,11 +54,12 @@ static void CleanupStaleNodes()
         snprintf(p, sizeof(p), "/sys/class/input/%s/name", ent->d_name);
         FILE* f = fopen(p, "r");
         if (!f) continue;
-        char n[64];
+        char n[64] = {};
         // Match our virtual uinput device only, not dongle sub-devices
         // (dongle names start with "Valve Software Steam Controller Puck ...")
+        if (!fgets(n, sizeof(n), f)) { fclose(f); continue; }
         fclose(f);
-        if (n[0] != 'S' || strncmp(n, "Steam Controller", 16) != 0)
+        if (strncmp(n, "Steam Controller", 16) != 0)
             continue;
         // Also skip if it has "Puck" (dongle interface)
         if (strstr(n, "Puck")) continue;
@@ -191,6 +192,54 @@ void VirtualGamepad::Destroy()
 }
 
 // ---------------------------------------------------------------------------
+// ReleaseAll — emit release for all keys, center all axes, drop MT touches
+// Called before Destroy() so apps see the key-up events instead of hanging.
+// ---------------------------------------------------------------------------
+
+void VirtualGamepad::ReleaseAll()
+{
+    if (m_fd < 0)
+        return;
+
+    // Release all keyboard-style buttons
+    for (int key : { BTN_A, BTN_B, BTN_X, BTN_Y,
+                     BTN_TL, BTN_TR, BTN_TL2, BTN_TR2,
+                     BTN_THUMBL, BTN_THUMBR,
+                     BTN_START, BTN_SELECT, BTN_MODE,
+                     BTN_WHEEL, BTN_GEAR_UP, BTN_EXTRA })
+        Emit(EV_KEY, key, 0);
+
+    // Center joysticks and triggers
+    Emit(EV_ABS, ABS_X,      0);
+    Emit(EV_ABS, ABS_Y,      0);
+    Emit(EV_ABS, ABS_Z,      0);
+    Emit(EV_ABS, ABS_RZ,     0);
+    Emit(EV_ABS, ABS_BRAKE,  0);
+    Emit(EV_ABS, ABS_GAS,    0);
+    Emit(EV_ABS, ABS_HAT0X,  0);
+    Emit(EV_ABS, ABS_HAT0Y,  0);
+
+    // Drop MT trackpad touches
+    Emit(EV_ABS, ABS_MT_SLOT, 0);
+    Emit(EV_ABS, ABS_MT_TRACKING_ID, -1);
+    Emit(EV_ABS, ABS_MT_SLOT, 1);
+    Emit(EV_ABS, ABS_MT_TRACKING_ID, -1);
+    Emit(EV_ABS, ABS_MT_SLOT, 0);
+
+    EmitSyn();
+
+    // Reset internal state for next connection
+    std::memset(&m_prevButtons, 0, sizeof(m_prevButtons));
+    m_prevFlags    = 0;
+    m_prevTriggerL = m_prevTriggerR = 0;
+    m_prevLX = m_prevLY = m_prevRX = m_prevRY = 0;
+    m_prevHatX = m_prevHatY = 0;
+    m_prevTP1X = m_prevTP1Y = m_prevTP1C = 0;
+    m_prevTP2X = m_prevTP2Y = m_prevTP2C = 0;
+    m_tp1TrackingId = m_tp2TrackingId = -1;
+}
+
+// ---------------------------------------------------------------------------
 // Create missing /dev/input/eventX node for the newest device
 // ---------------------------------------------------------------------------
 
@@ -258,6 +307,50 @@ static void FixEventNode()
         system(cmd);
         printf("  fixed event node %s (%d:%d)\n", node, newestMajor, newestMinor);
     }
+}
+
+// ---------------------------------------------------------------------------
+// ReleaseAllKeyboardKeys — temporary uinput keyboard that releases every
+// scancode to flush stuck key-down events from the controller's keyboard
+// HID interface. Safe to call at any time.
+// ---------------------------------------------------------------------------
+
+void VirtualGamepad::ReleaseAllKeyboardKeys()
+{
+    int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return;
+
+    ioctl(fd, UI_SET_EVBIT, EV_KEY);
+
+    // Declare support for all key codes 1–255
+    for (int code = 1; code < 256; ++code)
+        ioctl(fd, UI_SET_KEYBIT, code);
+
+    struct uinput_setup usetup{};
+    usetup.id.bustype = BUS_USB;
+    strcpy(usetup.name, "sc2d-key-flush");
+    if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) { close(fd); return; }
+    if (ioctl(fd, UI_DEV_CREATE) < 0) { close(fd); return; }
+
+    struct input_event ev{};
+    ev.type = EV_KEY;
+    ev.value = 0;  // release
+
+    for (int code = 1; code < 256; ++code) {
+        ev.code = code;
+        write(fd, &ev, sizeof(ev));
+    }
+
+    ev.type = EV_SYN;
+    ev.code = SYN_REPORT;
+    ev.value = 0;
+    write(fd, &ev, sizeof(ev));
+
+    // Small delay to let the kernel process the events before we disappear
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    ioctl(fd, UI_DEV_DESTROY);
+    close(fd);
 }
 
 // ---------------------------------------------------------------------------

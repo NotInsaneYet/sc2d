@@ -5,6 +5,11 @@
 #include <cstring>
 #include <thread>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <unistd.h>
+
 // ---------------------------------------------------------------------------
 // Command buffer builder
 // ---------------------------------------------------------------------------
@@ -119,6 +124,82 @@ size_t SteamController::ReadReport(uint8_t* buffer, size_t size,
                                     uint32_t timeoutMs)
 {
     return m_device.ReadInputReport(buffer, size, timeoutMs);
+}
+
+// ---------------------------------------------------------------------------
+// DrainUntilReleased — wait for physical buttons to come up
+// ---------------------------------------------------------------------------
+
+void SteamController::DrainUntilReleased(uint8_t maskB2, uint8_t maskB3,
+                                          uint8_t maskB4, uint32_t timeoutMs)
+{
+    auto deadline = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(timeoutMs);
+    uint8_t buf[64];
+
+    printf("  draining combo buttons...\n");
+    while (std::chrono::steady_clock::now() < deadline) {
+        size_t n = ReadReport(buf, sizeof(buf), 50);
+        if (n == 0 || buf[0] != REPORT_STATE)
+            continue;
+        bool stillHeld = (buf[2] & maskB2) || (buf[3] & maskB3) || (buf[4] & maskB4);
+        if (!stillHeld) {
+            printf("  combo buttons released\n");
+            return;
+        }
+    }
+    printf("  drain timeout — forcing lizard switch\n");
+}
+
+// ---------------------------------------------------------------------------
+// ReleaseStuckKeys — scan sysfs for all Valve input event devices and
+// write EV_KEY release for every scancode + SYN_REPORT. This directly
+// clears stuck key-down on the actual keyboard device, which a separate
+// uinput device cannot reach.
+// ---------------------------------------------------------------------------
+
+void SteamController::ReleaseStuckKeys()
+{
+    DIR* dir = opendir("/sys/class/input");
+    if (!dir) return;
+
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strncmp(ent->d_name, "event", 5) != 0)
+            continue;
+
+        char path[256];
+        snprintf(path, sizeof(path), "/sys/class/input/%s/device/id/vendor",
+                 ent->d_name);
+        FILE* f = fopen(path, "r");
+        if (!f) continue;
+        unsigned v = 0;
+        fscanf(f, "%x", &v);
+        fclose(f);
+        if (v != VALVE_VID)
+            continue;
+
+        snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+        int fd = open(path, O_RDWR);
+        if (fd < 0)
+            continue;
+
+        struct input_event ev{};
+        ev.type = EV_KEY;
+        ev.value = 0;
+        for (int code = 1; code < 256; ++code) {
+            ev.code = code;
+            write(fd, &ev, sizeof(ev));
+        }
+        ev.type = EV_SYN;
+        ev.code = SYN_REPORT;
+        ev.value = 0;
+        write(fd, &ev, sizeof(ev));
+
+        close(fd);
+        printf("  flushed stuck keys on %s\n", ent->d_name);
+    }
+    closedir(dir);
 }
 
 // ---------------------------------------------------------------------------
