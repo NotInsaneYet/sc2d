@@ -17,7 +17,7 @@ Works on any **rooted Android device** with `CONFIG_HIDRAW` + `CONFIG_INPUT_UINP
 
 - **Full gamepad** — buttons, analog sticks, D-pad, analog triggers
 - **Trackpads** — multi-touch via MT protocol
-- **Hotkey stop** — hold **Steam + Menu + View** for 1s → back to lizard mode
+- **Hotkey stop** — press **Steam + Menu + View** 3 times in quick succession → back to lizard mode
 - **Quick Settings Tile** — toggle on/off from the notification shade
 - **Auto-reconnect** — detects disconnect, reconnects on replug
 - **Clean exit** — re-enables lizard mode on shutdown
