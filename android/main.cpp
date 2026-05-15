@@ -1,6 +1,10 @@
 #include "SteamController.h"
 #include "VirtualGamepad.h"
 
+#ifdef HAS_PASSTHROUGH
+#include "PassthroughDevice.h"
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -41,6 +45,9 @@ int main()
 
     SteamController controller;
     VirtualGamepad  gamepad;
+#ifdef HAS_PASSTHROUGH
+    PassthroughDevice passthrough;
+#endif
 
     while (g_running.load()) {
 
@@ -72,6 +79,9 @@ int main()
             continue;
         }
         printf("  virtual gamepad ready\n\n");
+#ifdef HAS_PASSTHROUGH
+        passthrough.Open(gamepad.GetUinputFd());
+#endif
         printf("  daemon running — tap Steam+Menu+View 3× to stop\n\n");
 
         // ---- Main input loop ----
@@ -87,6 +97,9 @@ int main()
             size_t n = controller.ReadReport(buf, sizeof(buf), 100);
 
             if (n == 0) {
+#ifdef HAS_PASSTHROUGH
+                passthrough.Poll();
+#endif
                 if (!reportedDisconnect && !controller.IsOpen()) {
                     printf("  controller disconnected\n");
                     reportedDisconnect = true;
@@ -98,6 +111,10 @@ int main()
                 continue;
 
             gamepad.Update(buf, n);
+
+#ifdef HAS_PASSTHROUGH
+            passthrough.Poll();
+#endif
 
             // Detect any button release (falling edge) and flush stuck keys
             static uint8_t s_prevB2 = 0, s_prevB3 = 0, s_prevB4 = 0, s_prevB5 = 0;

@@ -22,6 +22,7 @@ public:
     static void ReleaseAllKeyboardKeys();
 
     bool IsValid() const { return m_fd >= 0; }
+    int GetUinputFd() const { return m_fd; }
 
     void Update(const uint8_t* buf, size_t n);
 

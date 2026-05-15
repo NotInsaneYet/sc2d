@@ -6,3 +6,14 @@ keystore.jks
 fftest
 rumbletest
 hidrawtest
+android/PassthroughDevice.h
+android/PassthroughDevice.cpp
+ControllerManager.h
+HidDevice.cpp
+HidDevice.h
+RawControllerProbe.cpp
+SteamController.cpp
+SteamController.h
+TrackpadMouse.h
+VirtualController.h
+main.cpp

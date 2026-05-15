@@ -15,6 +15,12 @@ set(SOURCES
     VirtualGamepad.cpp
 )
 
+# PassthroughDevice — local-only RP5 built-in controller support
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/PassthroughDevice.cpp)
+    list(APPEND SOURCES PassthroughDevice.cpp)
+    add_definitions(-DHAS_PASSTHROUGH)
+endif()
+
 # ---------------------------------------------------------------------------
 # Target
 # ---------------------------------------------------------------------------
