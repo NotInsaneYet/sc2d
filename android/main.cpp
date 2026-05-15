@@ -49,204 +49,136 @@ int main()
     PassthroughDevice passthrough;
 #endif
 
+    // ---- Create virtual gamepad ONCE (persists across disconnects) ----
+    printf("  creating virtual gamepad...\n");
+    while (g_running.load()) {
+        if (gamepad.Create())
+            break;
+        printf("  retrying gamepad creation in 3s...\n");
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+    if (!g_running.load()) return 0;
+    printf("  virtual gamepad ready (persistent)\n\n");
+
+#ifdef HAS_PASSTHROUGH
+    passthrough.Open(gamepad.GetUinputFd());
+#endif
+
+    printf("  daemon running — tap Steam+Menu+View 3× to stop\n\n");
+
+    uint8_t buf[64];
+    bool comboWasPressed = false;
+    int  tapCount = 0;
+    auto lastTapTime = std::chrono::steady_clock::now();
+
     while (g_running.load()) {
 
-        // ---- Connect ----
-        if (!controller.Open()) {
-            printf("  retrying in 3 seconds...\n");
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-            continue;
-        }
-
-        // ---- Disable lizard mode ----
-        printf("  disabling lizard mode...\n");
-        if (!controller.DisableLizardMode()) {
-            fprintf(stderr, "  FAILED to disable lizard mode\n");
-            controller.Close();
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-            continue;
-        }
-        printf("  lizard mode OFF\n");
-
-        // ---- Create virtual gamepad ----
-        printf("  creating virtual gamepad...\n");
-        if (!gamepad.Create()) {
-            fprintf(stderr, "  FAILED to create virtual gamepad\n");
-            controller.EnableLizardMode();
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            controller.Close();
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            continue;
-        }
-        printf("  virtual gamepad ready\n\n");
-#ifdef HAS_PASSTHROUGH
-        passthrough.Open(gamepad.GetUinputFd());
-#endif
-        printf("  daemon running — tap Steam+Menu+View 3× to stop\n\n");
-
-        // ---- Main input loop ----
-        uint8_t buf[64];
-        bool reportedDisconnect = false;
-
-        // Triple-tap detection: press Steam+Menu+View together 3× within 1.5s
-        bool comboWasPressed = false;
-        int  tapCount = 0;
-        auto lastTapTime = std::chrono::steady_clock::now();
-
-        while (g_running.load() && controller.IsOpen()) {
-            size_t n = controller.ReadReport(buf, sizeof(buf), 100);
-
-            if (n == 0) {
-#ifdef HAS_PASSTHROUGH
-                passthrough.Poll();
-#endif
-                if (!reportedDisconnect && !controller.IsOpen()) {
-                    printf("  controller disconnected\n");
-                    reportedDisconnect = true;
-                }
+        // ---- Connect / Reconnect ----
+        if (!controller.IsOpen()) {
+            if (!controller.Open()) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
 
-            if (buf[0] != SteamController::REPORT_STATE)
+            printf("  disabling lizard mode...\n");
+            if (!controller.DisableLizardMode()) {
+                fprintf(stderr, "  FAILED to disable lizard mode\n");
+                controller.Close();
+                std::this_thread::sleep_for(std::chrono::seconds(3));
                 continue;
+            }
+            printf("  lizard mode OFF — controller connected\n");
+        }
 
-            gamepad.Update(buf, n);
+        // ---- Read input ----
+        size_t n = controller.ReadReport(buf, sizeof(buf), 100);
 
+        if (n == 0) {
 #ifdef HAS_PASSTHROUGH
             passthrough.Poll();
 #endif
-
-            // Detect any button release (falling edge) and flush stuck keys
-            static uint8_t s_prevB2 = 0, s_prevB3 = 0, s_prevB4 = 0, s_prevB5 = 0;
-            bool anyReleased = false;
-            auto checkRelease = [&](uint8_t cur, uint8_t& prev) {
-                if ((prev & ~cur) != 0) anyReleased = true;
-                prev = cur;
-            };
-            checkRelease(buf[2], s_prevB2);
-            checkRelease(buf[3], s_prevB3);
-            checkRelease(buf[4], s_prevB4);
-            checkRelease(buf[5], s_prevB5);
-            if (anyReleased)
-                SteamController::ReleaseStuckKeys();
-
-            // L5 + R5 held 0.5s → Android Back
-            {
-                static bool s_comboWas = false;
-                static auto s_start = std::chrono::steady_clock::time_point{};
-                static bool s_fired = false;
-                bool l5 = (buf[4] & SteamController::SC_BTN_L5) != 0;
-                bool r5 = (buf[3] & SteamController::SC_BTN_R5) != 0;
-                bool combo = l5 && r5;
-
-                if (combo) {
-                    if (!s_comboWas)
-                        s_start = std::chrono::steady_clock::now();
-                    auto held = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - s_start).count();
-                    if (held >= 500 && !s_fired) {
-                        s_fired = true;
-                        printf("  L5+R5 → Android Back\n");
-                        system("input keyevent 4");
-                    }
-                } else if (!l5 && !r5) {
-                    s_fired = false;
-                }
-                s_comboWas = combo;
-            }
-
-            // Debug: print raw button bytes on first run to verify mapping
-            static bool s_dumpedMapping = false;
-            if (!s_dumpedMapping) {
-                bool facePressed = (buf[2] & 0x0F) != 0;
-                if (facePressed) {
-                    printf("  raw button bytes: [2]=0x%02X [3]=0x%02X [4]=0x%02X\n",
-                           buf[2], buf[3], buf[4]);
-                    auto showBit = [&](const char* label, uint8_t mask) {
-                        printf("    %s: %s\n", label,
-                               (buf[2] & mask) ? "PRESSED" : "released");
-                    };
-                    showBit("A (bit0)", 0x01);
-                    showBit("B (bit1)", 0x02);
-                    showBit("X (bit2)", 0x04);
-                    showBit("Y (bit3)", 0x08);
-                    printf("\n");
-                    s_dumpedMapping = true;
-                }
-            }
-
-            // Triple-tap: press Steam+Menu+View together 3× within 1.5s
-            bool steam = (buf[4] & SteamController::SC_BTN_STEAM) != 0;
-            bool menu  = (buf[2] & SteamController::SC_BTN_MENU)  != 0;
-            bool view  = (buf[3] & SteamController::SC_BTN_VIEW)  != 0;
-            bool allPressed = steam && menu && view;
-
-            if (allPressed && !comboWasPressed) {
-                // Rising edge — user pressed all three
-                auto now = std::chrono::steady_clock::now();
-                auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              now - lastTapTime).count();
-                if (dt > 1500)
-                    tapCount = 0;
-
-                tapCount++;
-                lastTapTime = now;
-                printf("  tap %d/3\n", tapCount);
-
-                if (tapCount >= 3) {
-                    printf("  triple tap detected — stopping daemon\n");
-                    g_running.store(false);
-                    break;
-                }
-            }
-            comboWasPressed = allPressed;
+            if (!controller.IsOpen())
+                printf("  controller disconnected, gamepad stays alive\n");
+            continue;
         }
 
-        // ---- Cleanup this session ----
-        printf("\n  shutting down...\n");
+        if (buf[0] != SteamController::REPORT_STATE)
+            continue;
 
-        // Release gamepad buttons before destroying the uinput device
-        gamepad.ReleaseAll();
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        gamepad.Destroy();
+        gamepad.Update(buf, n);
 
-        // Flush any stuck keyboard keys directly on the controller's event
-        // devices (the temporary uinput approach can't reach these).
-        SteamController::ReleaseStuckKeys();
+#ifdef HAS_PASSTHROUGH
+        passthrough.Poll();
+#endif
 
-        if (controller.IsOpen()) {
-            // Device still connected — this was a combo shutdown.
-            // Read and discard pending reports to flush the HID pipe before
-            // draining, so we don't see stale combo-held reports.
-            {
-                uint8_t flush[64];
-                for (int i = 0; i < 20; ++i) {
-                    if (controller.ReadReport(flush, sizeof(flush), 10) == 0)
-                        break;
-                }
+        // ---- Triple-tap: press Steam+Menu+View together 3× within 1.5s ----
+        bool steam = (buf[4] & SteamController::SC_BTN_STEAM) != 0;
+        bool menu  = (buf[2] & SteamController::SC_BTN_MENU)  != 0;
+        bool view  = (buf[3] & SteamController::SC_BTN_VIEW)  != 0;
+        bool allPressed = steam && menu && view;
+
+        if (allPressed && !comboWasPressed) {
+            auto now = std::chrono::steady_clock::now();
+            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now - lastTapTime).count();
+            if (dt > 1500) tapCount = 0;
+            tapCount++;
+            lastTapTime = now;
+            printf("  tap %d/3\n", tapCount);
+            if (tapCount >= 3) {
+                printf("  triple tap detected — stopping daemon\n");
+                g_running.store(false);
             }
-
-            // Then wait for the combo buttons to be physically released.
-            // This prevents the controller from sending stuck keyboard scancodes
-            // when lizard mode re-enables.
-            controller.DrainUntilReleased(
-                SteamController::SC_BTN_MENU,   // byte 2
-                SteamController::SC_BTN_VIEW,   // byte 3
-                SteamController::SC_BTN_STEAM,  // byte 4
-                4000);
-
-            // Now safe — all buttons are released before lizard mode comes back
-            controller.EnableLizardMode();
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
+        comboWasPressed = allPressed;
 
-        controller.Close();
+        // L5 + R5 held 0.5s → Android Back
+        {
+            static bool s_comboWas = false;
+            static auto s_start = std::chrono::steady_clock::time_point{};
+            static bool s_fired = false;
+            bool l5 = (buf[4] & SteamController::SC_BTN_L5) != 0;
+            bool r5 = (buf[3] & SteamController::SC_BTN_R5) != 0;
+            bool combo = l5 && r5;
 
-        if (g_running.load()) {
-            printf("  reconnecting...\n\n");
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (combo) {
+                if (!s_comboWas)
+                    s_start = std::chrono::steady_clock::now();
+                auto held = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - s_start).count();
+                if (held >= 500 && !s_fired) {
+                    s_fired = true;
+                    printf("  L5+R5 → Android Back\n");
+                    system("input keyevent 4");
+                }
+            } else if (!l5 && !r5) {
+                s_fired = false;
+            }
+            s_comboWas = combo;
         }
     }
+
+    // ---- Cleanup ----
+    printf("\n  cleaning up...\n");
+    gamepad.ReleaseAll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    gamepad.Destroy();
+    SteamController::ReleaseStuckKeys();
+
+    if (controller.IsOpen()) {
+        uint8_t flush[64];
+        for (int i = 0; i < 20; ++i) {
+            if (controller.ReadReport(flush, sizeof(flush), 10) == 0) break;
+        }
+        controller.DrainUntilReleased(
+            SteamController::SC_BTN_MENU,
+            SteamController::SC_BTN_VIEW,
+            SteamController::SC_BTN_STEAM,
+            4000);
+        controller.EnableLizardMode();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+    controller.Close();
 
     return 0;
 }
