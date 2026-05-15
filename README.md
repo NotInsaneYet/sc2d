@@ -39,7 +39,7 @@ adb shell chmod 755 /data/local/tmp/sc2d
 adb shell su -c /data/local/tmp/sc2d
 ```
 
-Hold **Steam + Menu + View** for 1 second to stop and restore lizard mode.
+Press **Steam + Menu + View** 3 times to stop and restore lizard mode.
 
 ## Quick Settings Tile
 
