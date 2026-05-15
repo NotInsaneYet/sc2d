@@ -21,6 +21,7 @@ Works on any **rooted Android device** with `CONFIG_HIDRAW` + `CONFIG_INPUT_UINP
 - **Quick Settings Tile** — toggle on/off from the notification shade
 - **Auto-reconnect** — detects disconnect, reconnects on replug
 - **Clean exit** — re-enables lizard mode on shutdown
+- **Android Back button** — hold **L5 + R5** for 0.5s to trigger system back
 
 ## Requirements
 
@@ -90,6 +91,13 @@ The daemon:
 6. On exit, performs a two-step lizard mode re-enable sequence
 
 The 0x42 report layout is documented in [`SteamController.h`](android/SteamController.h).
+
+## Button Combos
+
+| Combo | Duration | Action |
+|-------|----------|--------|
+| Tap Steam+Menu+View ×3 | Within 1.5s | Stop daemon, restore lizard mode |
+| Hold L5+R5 | 0.5s | Android system Back |
 
 ## Rumble
 

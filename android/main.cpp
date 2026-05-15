@@ -130,6 +130,31 @@ int main()
             if (anyReleased)
                 SteamController::ReleaseStuckKeys();
 
+            // L5 + R5 held 0.5s → Android Back
+            {
+                static bool s_comboWas = false;
+                static auto s_start = std::chrono::steady_clock::time_point{};
+                static bool s_fired = false;
+                bool l5 = (buf[4] & SteamController::SC_BTN_L5) != 0;
+                bool r5 = (buf[3] & SteamController::SC_BTN_R5) != 0;
+                bool combo = l5 && r5;
+
+                if (combo) {
+                    if (!s_comboWas)
+                        s_start = std::chrono::steady_clock::now();
+                    auto held = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - s_start).count();
+                    if (held >= 500 && !s_fired) {
+                        s_fired = true;
+                        printf("  L5+R5 → Android Back\n");
+                        system("input keyevent 4");
+                    }
+                } else if (!l5 && !r5) {
+                    s_fired = false;
+                }
+                s_comboWas = combo;
+            }
+
             // Debug: print raw button bytes on first run to verify mapping
             static bool s_dumpedMapping = false;
             if (!s_dumpedMapping) {
