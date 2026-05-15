@@ -72,6 +72,9 @@ int main()
             continue;
         }
         printf("  virtual gamepad ready\n\n");
+        gamepad.OpenSecondary();
+        if (gamepad.HasSecondary())
+            printf("  secondary controller (RP5 built-in) active\n");
         printf("  daemon running — tap Steam+Menu+View 3× to stop\n\n");
 
         // ---- Main input loop ----
@@ -87,6 +90,7 @@ int main()
             size_t n = controller.ReadReport(buf, sizeof(buf), 100);
 
             if (n == 0) {
+                gamepad.PollSecondary();
                 if (!reportedDisconnect && !controller.IsOpen()) {
                     printf("  controller disconnected\n");
                     reportedDisconnect = true;
@@ -98,6 +102,9 @@ int main()
                 continue;
 
             gamepad.Update(buf, n);
+
+            // Forward events from the RP5 built-in controller
+            gamepad.PollSecondary();
 
             // Detect any button release (falling edge) and flush stuck keys
             static uint8_t s_prevB2 = 0, s_prevB3 = 0, s_prevB4 = 0, s_prevB5 = 0;

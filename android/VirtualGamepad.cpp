@@ -184,6 +184,7 @@ bool VirtualGamepad::Create()
 
 void VirtualGamepad::Destroy()
 {
+    CloseSecondary();
     if (m_fd >= 0) {
         ioctl(m_fd, UI_DEV_DESTROY);
         close(m_fd);
@@ -237,6 +238,100 @@ void VirtualGamepad::ReleaseAll()
     m_prevTP1X = m_prevTP1Y = m_prevTP1C = 0;
     m_prevTP2X = m_prevTP2Y = m_prevTP2C = 0;
     m_tp1TrackingId = m_tp2TrackingId = -1;
+}
+
+// ---------------------------------------------------------------------------
+// Secondary device — RP5 built-in controller passthrough
+// ---------------------------------------------------------------------------
+
+static const char* SECONDARY_NAMES[] = {
+    "Xbox Wireless Controller",
+    "qbt_key_input",
+    nullptr,
+};
+
+bool VirtualGamepad::NameMatches(const char* name)
+{
+    if (!name) return false;
+    for (int i = 0; SECONDARY_NAMES[i]; ++i) {
+        if (strstr(name, SECONDARY_NAMES[i]))
+            return true;
+    }
+    return false;
+}
+
+void VirtualGamepad::OpenSecondary()
+{
+    if (m_secondaryFd >= 0)
+        return;
+
+    DIR* dir = opendir("/sys/class/input");
+    if (!dir) return;
+
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strncmp(ent->d_name, "input", 5) != 0) continue;
+
+        char p[256];
+        snprintf(p, sizeof(p), "/sys/class/input/%s/name", ent->d_name);
+        FILE* f = fopen(p, "r");
+        if (!f) continue;
+        char n[64] = {};
+        if (!fgets(n, sizeof(n), f)) { fclose(f); continue; }
+        fclose(f);
+
+        // Trim newline
+        n[strcspn(n, "\n")] = 0;
+        if (!NameMatches(n)) continue;
+
+        // Skip our own Steam Controller devices
+        if (strstr(n, "Steam Controller")) continue;
+
+        // Find the event node
+        char evPath[256];
+        snprintf(evPath, sizeof(evPath), "/sys/class/input/%s", ent->d_name);
+        DIR* evd = opendir(evPath);
+        if (!evd) continue;
+        struct dirent* ev;
+        while ((ev = readdir(evd)) != nullptr) {
+            if (strncmp(ev->d_name, "event", 5) != 0) continue;
+            char node[256];
+            snprintf(node, sizeof(node), "/dev/input/%s", ev->d_name);
+            m_secondaryFd = open(node, O_RDONLY | O_NONBLOCK);
+            if (m_secondaryFd >= 0) {
+                printf("  secondary: opened %s (%s)\n", node, n);
+                closedir(evd);
+                closedir(dir);
+                return;
+            }
+        }
+        closedir(evd);
+    }
+    closedir(dir);
+}
+
+void VirtualGamepad::CloseSecondary()
+{
+    if (m_secondaryFd >= 0) {
+        close(m_secondaryFd);
+        m_secondaryFd = -1;
+    }
+}
+
+void VirtualGamepad::PollSecondary()
+{
+    if (m_secondaryFd < 0)
+        return;
+
+    struct input_event ev;
+    while (true) {
+        ssize_t n = read(m_secondaryFd, &ev, sizeof(ev));
+        if (n != (ssize_t)sizeof(ev))
+            break;
+        // Forward to uinput — same fd as our gamepad events
+        if (m_fd >= 0)
+            write(m_fd, &ev, sizeof(ev));
+    }
 }
 
 // ---------------------------------------------------------------------------
