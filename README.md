@@ -1,6 +1,6 @@
 # sc2d — Steam Controller 2 Android Daemon
 
-Turn your Steam Controller (2026) into a standard Android gamepad — no Steam required.
+Turn your Steam Controller (2026) into a standard Android gamepad, no Steam required.
 
 Works on any **rooted Android device** with `CONFIG_HIDRAW` + `CONFIG_INPUT_UINPUT` (Retroid Pocket 3/4/5, Odin, Ayaneo, etc.).
 
